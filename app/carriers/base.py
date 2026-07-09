@@ -12,5 +12,5 @@ class Carrier(ABC):
         pass
 
     @abstractmethod
-    def get_rates(self, request: RateRequestSchema) -> List[RateQuoteSchema]:
+    async def get_rates(self, request: RateRequestSchema) -> List[RateQuoteSchema]:
         pass

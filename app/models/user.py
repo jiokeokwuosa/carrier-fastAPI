@@ -3,12 +3,17 @@
 import enum
 import uuid
 from datetime import datetime
-from typing import List
+from typing import TYPE_CHECKING, List
 
-from sqlalchemy import DateTime, JSON, String, func
+from sqlalchemy import DateTime, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+
+if TYPE_CHECKING:
+    from app.models.rate_quote import RateQuoteRecord
+    from app.models.refresh_token import RefreshToken
+    from app.models.role import Role
 
 
 class UserRole(str, enum.Enum):
@@ -24,7 +29,6 @@ class User(Base):
     )
     email: Mapped[str] = mapped_column(String, unique=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String, nullable=False)
-    roles: Mapped[List[str]] = mapped_column(JSON, default=lambda: [UserRole.USER.value])
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -32,6 +36,17 @@ class User(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-    refresh_tokens = relationship(
+    roles: Mapped[List["Role"]] = relationship(
+        "Role", secondary="user_roles", back_populates="users"
+    )
+    refresh_tokens: Mapped[List["RefreshToken"]] = relationship(
         "RefreshToken", back_populates="user", cascade="all, delete-orphan"
     )
+    rate_quotes: Mapped[List["RateQuoteRecord"]] = relationship(
+        "RateQuoteRecord", back_populates="user", cascade="all, delete-orphan"
+    )
+
+
+def role_names(user: User) -> List[str]:
+    """Return role names for JWT payloads and API responses."""
+    return [role.name for role in user.roles]

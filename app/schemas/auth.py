@@ -43,4 +43,3 @@ class UserPayload(CamelModel):
 class RegisterRequest(CamelModel):
     email: EmailStr
     password: str = Field(min_length=8)
-    roles: Optional[List[str]] = None

@@ -1,4 +1,4 @@
-"""UPS OAuth client-credentials flow with DB-backed token cache."""
+"""UPS OAuth client-credentials flow with Redis + DB-backed token cache."""
 
 import base64
 import logging
@@ -9,34 +9,50 @@ import httpx
 from app.core.config import settings
 from app.core.exceptions import AuthenticationError, NetworkError, TimeoutError
 from app.repositories import CarrierTokenRepository
+from app.services.cache_service import CacheService
 
 logger = logging.getLogger(__name__)
 
+_CARRIER_TOKEN_PREFIX = "carrier_token:"
+
 
 class CarrierAuthService:
-    """Manages UPS OAuth client-credentials tokens stored in the database."""
+    """Manages UPS OAuth client-credentials tokens with layered caching.
 
-    def __init__(self, repository: CarrierTokenRepository):
+    Lookup order: Redis (hot) → PostgreSQL (durable) → UPS API (cold).
+    """
+
+    def __init__(
+        self,
+        repository: CarrierTokenRepository,
+        cache: CacheService,
+    ):
         self.repository = repository
+        self.cache = cache
 
-    def return_access_token(self, platform: str) -> str:
+    async def return_access_token(self, platform: str) -> str:
         logger.warning("Getting %s API access token...", platform)
-        token = self.repository.find_by_platform(platform)
+        cache_key = f"{_CARRIER_TOKEN_PREFIX}{platform}"
+
+        cached = await self.cache.get(cache_key)
+        if cached and not self._is_expired(cached["issued_at"], cached["expires_in"]):
+            return cached["access_token"]
+
+        token = await self.repository.find_by_platform(platform)
         if token is None:
             logger.info("No token found for %s, acquiring new token...", platform)
-            return self.acquire_token(platform)
+            return await self.acquire_token(platform)
 
-        issued_at = int(token.issued_at)
-        expires_in = int(token.expires_in)
-        # UPS returns issued_at in milliseconds; expires_in is in seconds.
-        expiration_time = issued_at + expires_in * 1000
-        if self._current_time_ms() >= expiration_time:
+        if self._is_expired(token.issued_at, token.expires_in):
             logger.info("Current token for %s has expired, refreshing...", platform)
-            return self.acquire_token(platform)
+            return await self.acquire_token(platform)
 
+        await self._write_cache(
+            cache_key, token.issued_at, token.expires_in, token.access_token
+        )
         return token.access_token
 
-    def acquire_token(self, platform: str) -> str:
+    async def acquire_token(self, platform: str) -> str:
         if platform != "UPS":
             raise AuthenticationError(
                 f"Token acquisition not implemented for platform: {platform}"
@@ -50,8 +66,8 @@ class CarrierAuthService:
         ).decode()
 
         try:
-            with httpx.Client(timeout=10.0) as client:
-                response = client.post(
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(
                     settings.ups_oauth_url,
                     headers={
                         "Content-Type": "application/x-www-form-urlencoded",
@@ -79,7 +95,7 @@ class CarrierAuthService:
                 f"Token acquisition not approved: {data.get('status')}"
             )
 
-        self.repository.upsert(
+        await self.repository.upsert(
             platform=platform,
             token_type=data["token_type"],
             issued_at=data["issued_at"],
@@ -87,8 +103,27 @@ class CarrierAuthService:
             access_token=data["access_token"],
             expires_in=data["expires_in"],
         )
+        cache_key = f"{_CARRIER_TOKEN_PREFIX}{platform}"
+        await self._write_cache(
+            cache_key, data["issued_at"], data["expires_in"], data["access_token"]
+        )
         logger.info("Successfully acquired token for %s", platform)
         return data["access_token"]
+
+    async def _write_cache(
+        self, key: str, issued_at: str, expires_in: str, access_token: str
+    ) -> None:
+        ttl = max(int(expires_in) - 60, 60)
+        await self.cache.set(
+            key,
+            {"issued_at": issued_at, "expires_in": expires_in, "access_token": access_token},
+            ttl_seconds=ttl,
+        )
+
+    @staticmethod
+    def _is_expired(issued_at: str, expires_in: str) -> bool:
+        expiration_time = int(issued_at) + int(expires_in) * 1000
+        return CarrierAuthService._current_time_ms() >= expiration_time
 
     @staticmethod
     def _current_time_ms() -> int:

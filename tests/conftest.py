@@ -2,8 +2,7 @@
 
 import os
 
-# Required before importing app modules that call get_settings() at import time.
-os.environ.setdefault("DATABASE_URL", "sqlite:///./test.db")
+os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./test.db")
 os.environ.setdefault("UPS_API_BASE_URL", "https://wwwcie.ups.com")
 os.environ.setdefault("UPS_USERNAME", "test_user")
 os.environ.setdefault("UPS_PASSWORD", "test_pass")
@@ -16,12 +15,13 @@ from app.core.config import get_settings
 get_settings.cache_clear()
 
 import pytest
-from fastapi.testclient import TestClient
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 
 from app.core.database import Base, SessionLocal, engine, init_db
 from app.core.security import hash_password
 from app.main import app
-from app.models import User, UserRole
+from app.models import Role, User, UserRole
 
 VALID_RATE_REQUEST = {
     "origin": {"addressLine": ["123 Main St"], "countryCode": "US"},
@@ -60,27 +60,36 @@ MOCK_UPS_RATE_RESPONSE = {
 
 
 @pytest.fixture
-def client():
-    Base.metadata.drop_all(bind=engine)
-    init_db()
-    db = SessionLocal()
-    db.add(
-        User(
-            email="admin@test.com",
-            password_hash=hash_password("password123"),
-            roles=[UserRole.USER.value],
+async def client():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+    await init_db()
+
+    async with SessionLocal() as db:
+        result = await db.execute(
+            select(Role).where(Role.name == UserRole.ADMIN.value)
         )
-    )
-    db.commit()
-    db.close()
-    with TestClient(app) as test_client:
+        admin_role = result.scalar_one()
+        db.add(
+            User(
+                email="admin@test.com",
+                password_hash=hash_password("password123"),
+                roles=[admin_role],
+            )
+        )
+        await db.commit()
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as test_client:
         yield test_client
-    Base.metadata.drop_all(bind=engine)
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
 
 
 @pytest.fixture
-def auth_headers(client):
-    response = client.post(
+async def auth_headers(client):
+    response = await client.post(
         "/auth/login",
         json={"email": "admin@test.com", "password": "password123"},
     )

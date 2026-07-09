@@ -9,7 +9,6 @@ import httpx
 from app.carriers import Carrier
 from app.core.config import settings
 from app.core.exceptions import (
-    AuthenticationError,
     CarrierError,
     NetworkError,
     RateRequestError,
@@ -37,19 +36,20 @@ class UpsCarrierService(Carrier):
     def get_platform(self) -> str:
         return self.PLATFORM
 
-    def get_rates(self, request: RateRequestSchema) -> List[RateQuoteSchema]:
+    async def get_rates(self, request: RateRequestSchema) -> List[RateQuoteSchema]:
         try:
-            access_token = self.carrier_auth_service.return_access_token(self.PLATFORM)
+            access_token = await self.carrier_auth_service.return_access_token(
+                self.PLATFORM
+            )
             ups_request = self._build_ups_request(request)
-            response = self._make_rate_request(ups_request, access_token)
+            response = await self._make_rate_request(ups_request, access_token)
             return self._normalize_response(response)
         except CarrierError:
-            raise  # Already mapped; let the global handler format the response
+            raise
         except Exception as exc:
             raise RateRequestError(f"Failed to get rates: {exc}", {"error": str(exc)}) from exc
 
     def _build_ups_request(self, request: RateRequestSchema) -> dict:
-        # Map our camelCase API schema to UPS's PascalCase JSON structure.
         return {
             "RateRequest": {
                 "Request": {
@@ -90,7 +90,7 @@ class UpsCarrierService(Carrier):
             }
         }
 
-    def _make_rate_request(self, ups_request: dict, access_token: str) -> dict:
+    async def _make_rate_request(self, ups_request: dict, access_token: str) -> dict:
         query = urlencode({"additionalinfo": "string"})
         url = (
             f"{settings.UPS_API_BASE_URL}/api/rating/"
@@ -98,8 +98,8 @@ class UpsCarrierService(Carrier):
         )
 
         try:
-            with httpx.Client(timeout=30.0) as client:
-                response = client.post(
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
                     url,
                     headers={
                         "Content-Type": "application/json",
@@ -123,7 +123,6 @@ class UpsCarrierService(Carrier):
             )
 
         data = response.json()
-        # UPS signals application-level success with ResponseStatus.Code == "1".
         status_code = (
             data.get("RateResponse", {})
             .get("Response", {})
@@ -142,7 +141,6 @@ class UpsCarrierService(Carrier):
         return data
 
     def _normalize_response(self, response: dict) -> List[RateQuoteSchema]:
-        # UPS may return a single RatedShipment object or a list of them.
         rated_shipments = response.get("RateResponse", {}).get("RatedShipment") or []
         if not rated_shipments:
             return []

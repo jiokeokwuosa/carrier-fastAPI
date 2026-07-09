@@ -4,10 +4,12 @@ FastAPI port of the NestJS shipping rate service at `/Users/cj/Projects/carrier`
 
 ## Features
 
-- **UPS rate quotes** — `POST /rates/UPS`
-- **UPS OAuth token management** — client-credentials flow with DB-backed token cache
-- **User authentication** — JWT access tokens + refresh token rotation
+- **UPS rate quotes** — `POST /rates/UPS` (quotes are persisted for analytics)
+- **UPS OAuth token management** — client-credentials flow with Redis + DB cache
+- **User authentication** — JWT access tokens (with `exp`) + refresh token rotation
 - **User registration** — `POST /users/register` (public)
+- **Admin dashboard** — `GET /users/stats` (JOIN + aggregation queries)
+- **Alembic migrations** — versioned schema changes
 
 ## Project structure
 
@@ -16,14 +18,15 @@ carrier-fastapi/
 ├── app/
 │   ├── main.py
 │   ├── core/           # config, database, security, exceptions
-│   ├── models/         # SQLAlchemy models
+│   ├── models/         # SQLAlchemy models (normalized roles, rate quotes)
 │   ├── schemas/        # Pydantic request/response models
-│   ├── repositories/   # database access layer
-│   ├── services/       # business logic
+│   ├── repositories/   # database access layer (+ advanced SQL)
+│   ├── services/       # business logic (+ optional Redis cache)
 │   ├── carriers/       # carrier interface + UPS implementation
 │   └── api/
 │       ├── deps.py     # FastAPI dependencies
 │       └── v1/endpoints/
+├── alembic/            # database migrations
 ├── tests/
 ├── requirements.txt
 └── .env.example
@@ -38,6 +41,13 @@ source venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
 # Edit .env with your DATABASE_URL and UPS credentials
+```
+
+### Database migrations
+
+```bash
+alembic upgrade head    # apply all migrations
+alembic revision --autogenerate -m "describe_change"  # after model changes
 ```
 
 ## Run
@@ -56,7 +66,23 @@ Docs: http://localhost:3000/docs
 | POST | `/auth/refresh` | Public | Refresh access token |
 | GET | `/auth/me` | JWT | Current user profile |
 | POST | `/users/register` | Public | Register new user |
+| GET | `/users/stats` | Admin JWT | User & quote statistics |
 | POST | `/rates/UPS` | JWT | Get UPS shipping quotes |
+
+## Database concepts in this project
+
+| Concept | Where to look |
+|---------|---------------|
+| **Normalization (3NF)** | `app/models/role.py` — roles in their own table; `user_roles` association |
+| **SQLAlchemy relationships** | `User.roles`, `User.rate_quotes`, `RefreshToken.user` |
+| **Indexes** | `RefreshToken.__table_args__`, `RateQuoteRecord.__table_args__` |
+| **JOIN + GROUP BY + aggregations** | `app/repositories/user_stats_repository.py` |
+| **Alembic migrations** | `alembic/versions/` — run `alembic upgrade head` |
+| **Connection pooling** | `app/core/database.py` — `pool_size`, `pool_pre_ping`, `pool_recycle` |
+| **Redis caching** | `app/services/cache_service.py` + `carrier_auth_service.py` |
+| **Query optimization (eager loading)** | `selectinload` in `user_repository.py`, `joinedload` in `refresh_token_repository.py` |
+| **Data modeling for analytics** | `app/models/rate_quote.py` — persisted quote history |
+| **JWT with expiration** | `app/core/security.py` — `exp` and `iat` claims |
 
 ## Tests
 

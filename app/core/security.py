@@ -24,6 +24,13 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 
 def create_access_token(payload: Dict[str, Any]) -> str:
+    expires_in = parse_expires_to_seconds(settings.JWT_ACCESS_EXPIRES)
+    now = datetime.now(timezone.utc)
+    payload = {
+        **payload,
+        "iat": now,
+        "exp": now + timedelta(seconds=expires_in),
+    }
     return jwt.encode(payload, settings.JWT_ACCESS_SECRET, algorithm=ALGORITHM)
 
 

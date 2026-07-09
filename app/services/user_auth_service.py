@@ -12,6 +12,7 @@ from app.core.security import (
     parse_expires_to_seconds,
     refresh_token_expiry,
 )
+from app.models import role_names
 from app.repositories import RefreshTokenRepository
 from app.schemas import TokenPairResponse, UserPayload
 from app.services.user_service import UserService
@@ -28,12 +29,12 @@ class UserAuthService:
         self.user_service = user_service
         self.refresh_token_repository = refresh_token_repository
 
-    def login(self, user: UserPayload) -> TokenPairResponse:
-        return self._issue_token_pair(user)
+    async def login(self, user: UserPayload) -> TokenPairResponse:
+        return await self._issue_token_pair(user)
 
-    def refresh(self, refresh_token: str) -> TokenPairResponse:
+    async def refresh(self, refresh_token: str) -> TokenPairResponse:
         token_hash = hash_refresh_token(refresh_token)
-        record = self.refresh_token_repository.find_by_hash(token_hash)
+        record = await self.refresh_token_repository.find_by_hash(token_hash)
         if record is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -41,32 +42,31 @@ class UserAuthService:
             )
 
         if record.expires_at < datetime.now(timezone.utc):
-            self.refresh_token_repository.delete(record)
+            await self.refresh_token_repository.delete(record)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Refresh token expired",
             )
 
-        # One-time use: delete before issuing a new pair (rotation).
-        self.refresh_token_repository.delete(record)
+        await self.refresh_token_repository.delete(record)
         user = UserPayload(
             id=record.user.id,
             email=record.user.email,
-            roles=record.user.roles,
+            roles=role_names(record.user),
         )
-        return self._issue_token_pair(user)
+        return await self._issue_token_pair(user)
 
-    def _issue_token_pair(self, user: UserPayload) -> TokenPairResponse:
+    async def _issue_token_pair(self, user: UserPayload) -> TokenPairResponse:
         payload = {
             "sub": user.id,
             "email": user.email,
             "roles": user.roles,
-            "type": "access",  # Distinguishes access tokens from any future JWT types
+            "type": "access",
         }
         access_token = create_access_token(payload)
         refresh_token_raw = generate_refresh_token()
         refresh_token_hash = hash_refresh_token(refresh_token_raw)
-        self.refresh_token_repository.create(
+        await self.refresh_token_repository.create(
             user_id=user.id,
             token_hash=refresh_token_hash,
             expires_at=refresh_token_expiry(),

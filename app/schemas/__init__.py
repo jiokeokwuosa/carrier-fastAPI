@@ -12,8 +12,10 @@ from app.schemas.rate import (
     RateRequestSchema,
     RateResponseSchema,
 )
+from app.schemas.user_stats import CarrierQuoteStats, UserStatsResponse
 
 __all__ = [
+    "CarrierQuoteStats",
     "LoginRequest",
     "RefreshRequest",
     "RegisterRequest",
@@ -22,4 +24,5 @@ __all__ = [
     "RateResponseSchema",
     "TokenPairResponse",
     "UserPayload",
+    "UserStatsResponse",
 ]

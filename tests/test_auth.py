@@ -1,5 +1,5 @@
-def test_login_returns_tokens(client):
-    response = client.post(
+async def test_login_returns_tokens(client):
+    response = await client.post(
         "/auth/login",
         json={"email": "admin@test.com", "password": "password123"},
     )
@@ -10,15 +10,15 @@ def test_login_returns_tokens(client):
     assert data["expiresIn"] > 0
 
 
-def test_login_rejects_invalid_credentials(client):
-    response = client.post(
+async def test_login_rejects_invalid_credentials(client):
+    response = await client.post(
         "/auth/login",
         json={"email": "admin@test.com", "password": "wrong"},
     )
     assert response.status_code == 401
 
 
-def test_me_returns_current_user(client, auth_headers):
-    response = client.get("/auth/me", headers=auth_headers)
+async def test_me_returns_current_user(client, auth_headers):
+    response = await client.get("/auth/me", headers=auth_headers)
     assert response.status_code == 200
     assert response.json()["email"] == "admin@test.com"

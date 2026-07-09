@@ -2,23 +2,23 @@
 
 from typing import Optional
 
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import CarrierToken
 
 
 class CarrierTokenRepository:
-    def __init__(self, db: Session):
+    def __init__(self, db: AsyncSession):
         self.db = db
 
-    def find_by_platform(self, platform: str) -> Optional[CarrierToken]:
-        return (
-            self.db.query(CarrierToken)
-            .filter(CarrierToken.platform == platform)
-            .first()
+    async def find_by_platform(self, platform: str) -> Optional[CarrierToken]:
+        result = await self.db.execute(
+            select(CarrierToken).where(CarrierToken.platform == platform)
         )
+        return result.scalar_one_or_none()
 
-    def upsert(
+    async def upsert(
         self,
         platform: str,
         token_type: str,
@@ -27,16 +27,15 @@ class CarrierTokenRepository:
         access_token: str,
         expires_in: str,
     ) -> CarrierToken:
-        # One token per platform (e.g. "UPS"); update in place on refresh.
-        existing = self.find_by_platform(platform)
+        existing = await self.find_by_platform(platform)
         if existing:
             existing.token_type = token_type
             existing.issued_at = issued_at
             existing.client_id = client_id
             existing.access_token = access_token
             existing.expires_in = expires_in
-            self.db.commit()
-            self.db.refresh(existing)
+            await self.db.commit()
+            await self.db.refresh(existing)
             return existing
 
         token = CarrierToken(
@@ -48,6 +47,6 @@ class CarrierTokenRepository:
             expires_in=expires_in,
         )
         self.db.add(token)
-        self.db.commit()
-        self.db.refresh(token)
+        await self.db.commit()
+        await self.db.refresh(token)
         return token

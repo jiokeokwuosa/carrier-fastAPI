@@ -10,8 +10,8 @@ router = APIRouter(prefix="/users", tags=["Users"])
 
 
 @router.post("/register", response_model=UserPayload, status_code=status.HTTP_201_CREATED)
-def register(
+async def register(
     body: RegisterRequest,
     user_service: UserService = Depends(get_user_service),
 ):
-    return user_service.register(body.email, body.password, body.roles)
+    return await user_service.register(body.email, body.password)
